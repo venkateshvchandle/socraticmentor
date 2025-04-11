@@ -1,5 +1,4 @@
 import streamlit as st
-from langdetect import detect
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.vectorstores import Qdrant
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -8,21 +7,35 @@ from qdrant_client.http.models import Distance, VectorParams
 from langchain.chains import ConversationalRetrievalChain
 from langchain.evaluation.criteria import LabeledCriteriaEvalChain
 
-# 1. Streamlit UI
+# Set page layout
 st.set_page_config(page_title="EchoDeepak: Socratic Mentor", layout="wide")
 st.title("🧠 EchoDeepak: Socratic GenAI Mentor")
-st.markdown("Choose a topic to have a Socratic dialogue and get your score at the end!")
 
+# Prompt for API Key
+st.markdown("### 🔑 Enter your Gemini API key to get started")
+if "api_key" not in st.session_state:
+    st.session_state.api_key = ""
+
+api_key_input = st.text_input("Gemini API Key", type="password", value=st.session_state.api_key)
+if api_key_input:
+    st.session_state.api_key = api_key_input
+
+# Exit early if no API key
+if not st.session_state.api_key:
+    st.warning("Please enter your Gemini API key above to continue.")
+    st.stop()
+
+# Topic selection
+st.markdown("Choose a topic to have a Socratic dialogue and get your score at the end!")
 topics = [
     "Prompt Engineering", "Few-shot / One-shot / CoT", "LangChain / LlamaIndex",
     "Retrieval-Augmented Generation (RAG)", "Hallucinations in LLMs", "Responsible AI",
     "Agents and Automation", "GenAI Use Cases", "Ethics and Risks"
 ]
-
 selected_topic = st.selectbox("🎯 Select a GenAI Topic", topics)
 start_convo = st.button("Start Socratic Conversation")
 
-# 2. Define System Prompt
+# System Prompt
 system_prompt = f'''
 You are EchoDeepak, a Socratic AI mentor on the HiDevs platform. You must respond **only in English**, no matter what language the user uses.
 
@@ -45,12 +58,13 @@ NEVER reveal the answer. Your job is to guide them to discover the truth themsel
 Important: If a question or answer is not in English, politely remind the user to communicate in English only.
 '''
 
-# 3. Load Gemini & Qdrant
+# Set up Gemini + Qdrant
 @st.cache_resource
-def setup_chain():
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.4, system_message=system_prompt)
-    embedding_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+def setup_chain(api_key):
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.4, system_message=system_prompt, google_api_key=api_key)
+    embedding_model = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
 
+    # Mock content
     text = "Mock GenAI knowledge base content for testing RAG pipeline on chosen topic."
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_text(text)
@@ -61,11 +75,7 @@ def setup_chain():
         vectors_config=VectorParams(size=768, distance=Distance.COSINE)
     )
 
-    doc_store = Qdrant(
-        client=qdrant,
-        collection_name="genai_demo",
-        embeddings=embedding_model
-    )
+    doc_store = Qdrant(client=qdrant, collection_name="genai_demo", embeddings=embedding_model)
     doc_store.add_texts(chunks)
 
     qa_chain = ConversationalRetrievalChain.from_llm(
@@ -73,12 +83,13 @@ def setup_chain():
         retriever=doc_store.as_retriever(search_type="mmr", k=3),
         return_source_documents=False
     )
+
     return qa_chain, llm
 
-# 4. Initialize QA chain
-qa_chain, llm = setup_chain()
+# Load model and chain
+qa_chain, llm = setup_chain(st.session_state.api_key)
 
-# 5. Session State
+# Session state
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -88,32 +99,25 @@ if "conversation" not in st.session_state:
 if "conversation_started" not in st.session_state:
     st.session_state.conversation_started = False
 
-# 6. Start Conversation
+# Conversation interface
 if start_convo:
     st.session_state.conversation_started = True
 
 if st.session_state.conversation_started:
     st.markdown("### 🗒️ Conversation")
-    for q, a in st.session_state.history:
+    for q, a in reversed(st.session_state.history):  # Chat history on top
         st.markdown(f"**You:** {q}")
         st.markdown(f"**EchoDeepak:** {a}")
 
     user_input = st.text_input("👤 You:", key="user_input", placeholder="Ask something related to the topic...")
 
     if user_input:
-        try:
-            detected_lang = detect(user_input)
-        except:
-            detected_lang = "unknown"
+        response = qa_chain({"question": user_input, "chat_history": st.session_state.history})
+        st.session_state.history.append((user_input, response["answer"]))
+        st.session_state.conversation += f"User: {user_input}\nEchoDeepak: {response['answer']}\n"
+  
 
-        if detected_lang != "en":
-            st.warning("Please ask your question in English. EchoDeepak responds in English only.")
-        else:
-            response = qa_chain({"question": user_input, "chat_history": st.session_state.history})
-            st.session_state.history.append((user_input, response["answer"]))
-            st.session_state.conversation += f"User: {user_input}\nEchoDeepak: {response['answer']}\n"
-
-# 7. Evaluation
+# Evaluation
 if st.button("🎯 Evaluate My Understanding"):
     evaluator = LabeledCriteriaEvalChain.from_llm(
         llm=llm,
@@ -136,3 +140,4 @@ if st.button("🎯 Evaluate My Understanding"):
 
     st.subheader("📊 Evaluation Report")
     st.write(score["score"])
+
