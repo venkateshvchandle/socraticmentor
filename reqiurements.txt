@@ -1,5 +1,5 @@
-streamlit 
-langchain 
-langchain-google-genai 
+streamlit
+langchain
 qdrant-client
-langdetect
+google-generativeai
+langchain-google-genai
